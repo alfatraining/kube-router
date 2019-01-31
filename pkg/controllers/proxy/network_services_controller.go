@@ -278,7 +278,7 @@ func (nsc *NetworkServicesController) Run(healthChan chan<- *healthcheck.Control
 	glog.Infof("Starting network services controller")
 
 	// enable masquerad rule
-	err := ensureMasqueradeIptablesRule(nsc.masqueradeAll, nsc.podCidr)
+	err := ensureMasqueradeIptablesRule(nsc.masqueradeAll, nsc.podCidr, nsc.nodeIP)
 	if err != nil {
 		return errors.New("Failed to do add masquerad rule in POSTROUTING chain of nat table due to: %s" + err.Error())
 	}
@@ -363,7 +363,7 @@ func (nsc *NetworkServicesController) sync() error {
 	defer nsc.mu.Unlock()
 
 	// enable masquerad rule
-	err = ensureMasqueradeIptablesRule(nsc.masqueradeAll, nsc.podCidr)
+	err = ensureMasqueradeIptablesRule(nsc.masqueradeAll, nsc.podCidr, nsc.nodeIP)
 	if err != nil {
 		glog.Errorf("Failed to do add masquerad rule in POSTROUTING chain of nat table due to: %s", err.Error())
 	}
@@ -1446,17 +1446,17 @@ func (nsc *NetworkServicesController) buildEndpointsInfo() endpointsInfoMap {
 	return endpointsMap
 }
 
-// Add an iptable rule to masquerad outbound IPVS traffic. IPVS nat requires that reverse path traffic
+// Add an iptable rule to masquerade outbound IPVS traffic. IPVS nat requires that reverse path traffic
 // to go through the director for its functioning. So the masquerade rule ensures source IP is modifed
 // to node ip, so return traffic from real server (endpoint pods) hits the node/lvs director
-func ensureMasqueradeIptablesRule(masqueradeAll bool, podCidr string) error {
+func ensureMasqueradeIptablesRule(masqueradeAll bool, podCidr string, nodeIp net.IP) error {
 	iptablesCmdHandler, err := iptables.New()
 	if err != nil {
 		return errors.New("Failed to initialize iptables executor" + err.Error())
 	}
 	var args []string
 	if masqueradeAll {
-		args = []string{"-m", "ipvs", "--ipvs", "--vdir", "ORIGINAL", "--vmethod", "MASQ", "-m", "comment", "--comment", "", "-j", "MASQUERADE"}
+		args = []string{"-m", "ipvs", "--ipvs", "--vdir", "ORIGINAL", "--vmethod", "MASQ", "-m", "comment", "--comment", "", "-j", "SNAT", "--to-source", nodeIp.String()}
 		err = iptablesCmdHandler.AppendUnique("nat", "POSTROUTING", args...)
 		if err != nil {
 			return errors.New("Failed to run iptables command" + err.Error())
@@ -1465,7 +1465,7 @@ func ensureMasqueradeIptablesRule(masqueradeAll bool, podCidr string) error {
 	if len(podCidr) > 0 {
 		//TODO: ipset should be used for destination podCidr(s) match after multiple podCidr(s) per node get supported
 		args = []string{"-m", "ipvs", "--ipvs", "--vdir", "ORIGINAL", "--vmethod", "MASQ", "-m", "comment", "--comment", "",
-			"!", "-s", podCidr, "!", "-d", podCidr, "-j", "MASQUERADE"}
+			"!", "-s", podCidr, "!", "-d", podCidr, "-j", "SNAT", "--to-source", nodeIp.String()}
 		err = iptablesCmdHandler.AppendUnique("nat", "POSTROUTING", args...)
 		if err != nil {
 			return errors.New("Failed to run iptables command" + err.Error())
